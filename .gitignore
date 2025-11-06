@@ -1,0 +1,40 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+
+# Qt generated files
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qbs.user.*
+*.moc
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+*.qmlc
+*.jsc
+
+# C++ objects and libs
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+
+# Executables
+chmreader
+*.exe
+
+# Temporary files
+*~
+*.autosave
+*.tmp
+*.temp
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
