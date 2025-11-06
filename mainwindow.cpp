@@ -23,6 +23,11 @@
 #include <QMap>
 #include <QStack>
 #include <QDebug>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QVBoxLayout>
+#include <QWidget>
+#include <QLabel>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -42,16 +47,52 @@ void MainWindow::createUi()
 
     menuBar()->addAction(openAct);
 
+    // Create splitter for tree and view
     auto splitter = new QSplitter(this);
+    
+    // Left panel: search bar + tree
+    auto leftPanel = new QWidget(splitter);
+    auto leftLayout = new QVBoxLayout(leftPanel);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setSpacing(5);
+    
+    // Create search bar
+    auto searchLayout = new QHBoxLayout();
+    searchLayout->setSpacing(3);
+    m_searchEdit = new QLineEdit(leftPanel);
+    m_searchEdit->setPlaceholderText(tr("Search..."));
+    m_searchButton = new QPushButton(tr("Go"), leftPanel);
+    m_searchButton->setMaximumWidth(40);
+    m_clearSearchButton = new QPushButton(tr("Clear"), leftPanel);
+    m_clearSearchButton->setMaximumWidth(50);
+    
+    searchLayout->addWidget(m_searchEdit);
+    searchLayout->addWidget(m_searchButton);
+    searchLayout->addWidget(m_clearSearchButton);
+    
+    connect(m_searchButton, &QPushButton::clicked, this, &MainWindow::onSearch);
+    connect(m_clearSearchButton, &QPushButton::clicked, this, &MainWindow::onClearSearch);
+    connect(m_searchEdit, &QLineEdit::returnPressed, this, &MainWindow::onSearch);
+    connect(m_searchEdit, &QLineEdit::textChanged, this, &MainWindow::onSearchTextChanged);
+    
+    leftLayout->addLayout(searchLayout);
 
-    m_tree = new QTreeWidget(splitter);
+    // Tree widget
+    m_tree = new QTreeWidget(leftPanel);
     m_tree->setHeaderLabels({tr("Name"), tr("Path")});
     m_tree->header()->setSectionHidden(1, true);
     m_tree->setColumnCount(2);
+    
+    leftLayout->addWidget(m_tree);
 
+    // Right panel: web view
     m_view = new QWebEngineView(splitter);
 
     connect(m_tree, &QTreeWidget::itemActivated, this, &MainWindow::onTreeItemActivated);
+    connect(m_view, &QWebEngineView::loadFinished, this, &MainWindow::onPageLoaded);
+    
+    splitter->setStretchFactor(0, 1);
+    splitter->setStretchFactor(1, 3);
 
     setCentralWidget(splitter);
     setWindowTitle(tr("CHM Reader"));
@@ -136,6 +177,10 @@ void MainWindow::openChm()
             break;
         }
     }
+    
+    // Clear search keyword when opening new CHM
+    m_currentSearchKeyword.clear();
+    m_searchEdit->clear();
 }
 
 bool MainWindow::unpackChm(const QString &chmPath, const QString &outDir)
@@ -495,5 +540,224 @@ void MainWindow::cleanupTempDir()
     } else {
         qDebug() << "Failed to remove temporary directory";
     }
+}
+
+void MainWindow::onSearch()
+{
+    QString keyword = m_searchEdit->text().trimmed();
+    if (keyword.isEmpty()) {
+        QMessageBox::information(this, tr("Search"), tr("Please enter a search keyword."));
+        return;
+    }
+    
+    if (m_tmpDir.isEmpty()) {
+        QMessageBox::information(this, tr("Search"), tr("Please open a CHM file first."));
+        return;
+    }
+    
+    // Save search keyword for highlighting
+    m_currentSearchKeyword = keyword;
+    
+    searchInFiles(keyword);
+}
+
+void MainWindow::onSearchTextChanged(const QString &text)
+{
+    // Enable/disable search button based on text
+    m_searchButton->setEnabled(!text.trimmed().isEmpty());
+}
+
+void MainWindow::onClearSearch()
+{
+    // Clear search keyword
+    m_currentSearchKeyword.clear();
+    m_searchEdit->clear();
+    
+    if (m_tmpDir.isEmpty()) {
+        return;
+    }
+    
+    // Rebuild the original tree
+    m_tree->clear();
+    
+    // Try to find and parse .hhc (Table of Contents) file
+    QString hhcPath;
+    QStringList hhcCandidates = {"*.hhc"};
+    QDirIterator hhcIt(m_tmpDir, hhcCandidates, QDir::Files, QDirIterator::Subdirectories);
+    if (hhcIt.hasNext()) {
+        hhcPath = hhcIt.next();
+        buildTocTree(hhcPath);
+    }
+    
+    // If no TOC found or TOC is empty, build file tree
+    if (m_tree->topLevelItemCount() == 0) {
+        buildFileTree(m_tmpDir);
+    }
+}
+
+void MainWindow::searchInFiles(const QString &keyword)
+{
+    m_tree->clear();
+    
+    QTreeWidgetItem *rootItem = new QTreeWidgetItem(m_tree);
+    rootItem->setText(0, tr("Search Results: \"%1\"").arg(keyword));
+    rootItem->setExpanded(true);
+    
+    int matchCount = 0;
+    
+    // Search in all HTML files
+    QDirIterator it(m_tmpDir, QStringList() << "*.html" << "*.htm", 
+                    QDir::Files, QDirIterator::Subdirectories);
+    
+    while (it.hasNext()) {
+        QString filePath = it.next();
+        QFileInfo fileInfo(filePath);
+        
+        // Skip system files
+        if (fileInfo.fileName().startsWith('#') || fileInfo.fileName().startsWith('$')) {
+            continue;
+        }
+        
+        // Detect encoding for this file
+        QByteArray encoding = detectEncoding(filePath);
+        
+        // Read file content
+        QFile file(filePath);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            continue;
+        }
+        
+        QTextStream in(&file);
+        in.setCodec(encoding.constData());
+        QString content = in.readAll();
+        file.close();
+        
+        // Strip HTML tags for searching
+        QString plainText = stripHtmlTags(content);
+        
+        // Search for keyword (case insensitive)
+        if (plainText.contains(keyword, Qt::CaseInsensitive)) {
+            matchCount++;
+            
+            // Extract title from HTML
+            QString title = fileInfo.fileName();
+            QRegularExpression titleRx("<title>([^<]+)</title>", QRegularExpression::CaseInsensitiveOption);
+            QRegularExpressionMatch match = titleRx.match(content);
+            if (match.hasMatch()) {
+                title = match.captured(1).trimmed();
+            }
+            
+            // Find context around the keyword
+            int pos = plainText.indexOf(keyword, 0, Qt::CaseInsensitive);
+            int contextStart = qMax(0, pos - 50);
+            int contextEnd = qMin(plainText.length(), pos + keyword.length() + 50);
+            QString context = plainText.mid(contextStart, contextEnd - contextStart).trimmed();
+            if (contextStart > 0) context = "..." + context;
+            if (contextEnd < plainText.length()) context = context + "...";
+            
+            auto item = new QTreeWidgetItem(rootItem);
+            item->setText(0, QString("%1 - %2").arg(title, context));
+            item->setText(1, filePath);
+            item->setToolTip(0, context);
+        }
+    }
+    
+    rootItem->setText(0, tr("Search Results: \"%1\" (%2 matches)").arg(keyword).arg(matchCount));
+    
+    if (matchCount == 0) {
+        auto item = new QTreeWidgetItem(rootItem);
+        item->setText(0, tr("No results found"));
+        item->setForeground(0, Qt::gray);
+    }
+}
+
+QString MainWindow::stripHtmlTags(const QString &html)
+{
+    QString text = html;
+    
+    // Remove script and style tags with their content
+    text.remove(QRegularExpression("<script[^>]*>.*</script>", QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption));
+    text.remove(QRegularExpression("<style[^>]*>.*</style>", QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption));
+    
+    // Remove HTML tags
+    text.remove(QRegularExpression("<[^>]*>"));
+    
+    // Decode HTML entities
+    text.replace("&nbsp;", " ");
+    text.replace("&lt;", "<");
+    text.replace("&gt;", ">");
+    text.replace("&amp;", "&");
+    text.replace("&quot;", "\"");
+    text.replace("&#39;", "'");
+    
+    // Normalize whitespace
+    text = text.simplified();
+    
+    return text;
+}
+
+void MainWindow::onPageLoaded(bool ok)
+{
+    if (!ok) {
+        return;
+    }
+    
+    // Highlight search keyword if there is one
+    if (!m_currentSearchKeyword.isEmpty()) {
+        highlightKeyword(m_currentSearchKeyword);
+    }
+}
+
+void MainWindow::highlightKeyword(const QString &keyword)
+{
+    if (keyword.isEmpty()) {
+        return;
+    }
+    
+    // JavaScript code to highlight text
+    QString js = QString(R"(
+        (function() {
+            // Remove previous highlights
+            var existingHighlights = document.querySelectorAll('.chm-search-highlight');
+            existingHighlights.forEach(function(el) {
+                var parent = el.parentNode;
+                parent.replaceChild(document.createTextNode(el.textContent), el);
+                parent.normalize();
+            });
+            
+            // Function to highlight text in a node
+            function highlightTextNode(node, keyword) {
+                var text = node.nodeValue;
+                var regex = new RegExp('(' + keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+                
+                if (regex.test(text)) {
+                    var span = document.createElement('span');
+                    span.innerHTML = text.replace(regex, '<span class="chm-search-highlight" style="background-color: yellow; font-weight: bold;">$1</span>');
+                    node.parentNode.replaceChild(span, node);
+                    
+                    // Scroll to first highlight
+                    var firstHighlight = document.querySelector('.chm-search-highlight');
+                    if (firstHighlight) {
+                        firstHighlight.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    }
+                }
+            }
+            
+            // Walk through all text nodes
+            function walkTextNodes(node) {
+                if (node.nodeType === 3) { // Text node
+                    highlightTextNode(node, '%1');
+                } else if (node.nodeType === 1 && node.nodeName !== 'SCRIPT' && node.nodeName !== 'STYLE') {
+                    for (var i = 0; i < node.childNodes.length; i++) {
+                        walkTextNodes(node.childNodes[i]);
+                    }
+                }
+            }
+            
+            walkTextNodes(document.body);
+        })();
+    )").arg(keyword);
+    
+    m_view->page()->runJavaScript(js);
 }
 
