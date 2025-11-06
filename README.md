@@ -17,6 +17,7 @@
 ## 依赖
 
 ### 系统要求
+
 - Ubuntu 18.04 或更高版本
 - Qt 5.9 或更高版本
 - CMake 3.1 或更高版本
@@ -30,6 +31,7 @@ sudo apt install qt5-default libqt5webkit5-dev qtwebengine5-dev p7zip-full cmake
 ```
 
 **注意**: Ubuntu 18.04 上 Qt 5.9 可能需要以下包：
+
 ```bash
 sudo apt install qtbase5-dev qtwebengine5-dev libqt5webenginewidgets5
 ```
@@ -38,7 +40,7 @@ sudo apt install qtbase5-dev qtwebengine5-dev libqt5webenginewidgets5
 
 ```bash
 # 进入项目目录
-cd /home/jiang/code/chm_reader
+cd [parent_dir]/chm_reader
 
 # 创建构建目录
 mkdir -p build
@@ -82,17 +84,21 @@ make
 ## 故障排除
 
 ### 中文显示乱码
+
 - 程序已内置自动编码检测和转换，一般不会出现乱码
 - 如果仍有问题，可能是 CHM 文件本身损坏或使用了非标准编码
 
 ### 无法打开 CHM 文件
+
 - 检查是否安装了 p7zip: `which 7z`
 - 确认 CHM 文件没有损坏
 
 ### 编译错误
+
 - 确认 Qt5 WebEngine 已正确安装
 - 检查 CMake 输出中是否找到了所有 Qt 组件
 
 ### 界面显示异常
+
 - 确保安装了 qtwebengine5-dev 包
 - Qt WebEngine 需要较新的图形驱动支持
