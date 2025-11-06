@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QSet>
 
 QT_BEGIN_NAMESPACE
 class QTreeWidget;
@@ -29,11 +30,13 @@ private:
     QByteArray detectEncoding(const QString &filePath);
     QString readFileWithEncoding(const QString &filePath, const QByteArray &encoding);
     void fixHtmlEncoding(const QString &htmlPath, const QByteArray &encoding);
+    void cleanupTempDir();
 
     QTreeWidget *m_tree = nullptr;
     QWebEngineView *m_view = nullptr;
     QString m_tmpDir;
     QByteArray m_detectedEncoding;
+    QSet<QString> m_convertedFiles;  // Track converted files to avoid re-conversion
 };
 
 #endif // MAINWINDOW_H

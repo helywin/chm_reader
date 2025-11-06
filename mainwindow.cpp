@@ -22,6 +22,7 @@
 #include <QRegularExpression>
 #include <QMap>
 #include <QStack>
+#include <QDebug>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -31,6 +32,7 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    cleanupTempDir();
 }
 
 void MainWindow::createUi()
@@ -61,6 +63,9 @@ void MainWindow::openChm()
     QString chmPath = QFileDialog::getOpenFileName(this, tr("Open CHM"), QString(), tr("CHM Files (*.chm);;All Files (*)"));
     if (chmPath.isEmpty()) return;
 
+    // Clean up previous temporary directory if exists
+    cleanupTempDir();
+
     // create temporary directory
     QTemporaryDir tmp;
     if (!tmp.isValid()) {
@@ -83,6 +88,9 @@ void MainWindow::openChm()
     }
 
     m_tmpDir = persistentOut;
+    
+    // Clear converted files cache for new CHM
+    m_convertedFiles.clear();
     
     // Detect encoding from first HTML file
     QDirIterator htmlIt(persistentOut, QStringList() << "*.html" << "*.htm", 
@@ -116,9 +124,13 @@ void MainWindow::openChm()
     for (const QString &c : candidates) {
         QString path = QDir(persistentOut).filePath(c);
         if (QFile::exists(path)) {
-            // Fix encoding if needed (GBK to UTF-8)
-            if (m_detectedEncoding != "UTF-8") {
-                fixHtmlEncoding(path, m_detectedEncoding);
+            // Detect and fix encoding if needed (only once)
+            if (!m_convertedFiles.contains(path)) {
+                QByteArray fileEncoding = detectEncoding(path);
+                if (fileEncoding != "UTF-8") {
+                    fixHtmlEncoding(path, fileEncoding);
+                }
+                m_convertedFiles.insert(path);
             }
             m_view->load(QUrl::fromLocalFile(path));
             break;
@@ -151,10 +163,16 @@ void MainWindow::onTreeItemActivated()
     QString path = item->text(1);
     if (path.isEmpty()) return;
 
-    // Fix encoding for HTML files if needed
-    if (m_detectedEncoding != "UTF-8" && 
-        (path.endsWith(".html", Qt::CaseInsensitive) || path.endsWith(".htm", Qt::CaseInsensitive))) {
-        fixHtmlEncoding(path, m_detectedEncoding);
+    // Fix encoding for HTML files if needed (only once per file)
+    if ((path.endsWith(".html", Qt::CaseInsensitive) || path.endsWith(".htm", Qt::CaseInsensitive))) {
+        if (!m_convertedFiles.contains(path)) {
+            // Detect encoding for this specific file
+            QByteArray fileEncoding = detectEncoding(path);
+            if (fileEncoding != "UTF-8") {
+                fixHtmlEncoding(path, fileEncoding);
+            }
+            m_convertedFiles.insert(path);
+        }
     }
     
     // Only load HTML files; for others, try to open raw data or show as file://
@@ -351,6 +369,8 @@ QByteArray MainWindow::detectEncoding(const QString &filePath)
     if (match.hasMatch()) {
         QString charset = match.captured(1).toUpper();
         
+        qDebug() << "Found charset in meta tag:" << charset << "for file:" << filePath;
+        
         // Map common Chinese charsets
         if (charset.contains("GBK") || charset.contains("GB2312") || 
             charset.contains("GB-2312") || charset.contains("CP936")) {
@@ -410,9 +430,12 @@ QString MainWindow::readFileWithEncoding(const QString &filePath, const QByteArr
 
 void MainWindow::fixHtmlEncoding(const QString &htmlPath, const QByteArray &encoding)
 {
+    qDebug() << "Converting file:" << htmlPath << "from encoding:" << encoding << "to UTF-8";
+    
     // Read file with detected encoding
     QFile file(htmlPath);
     if (!file.open(QIODevice::ReadOnly)) {
+        qDebug() << "Failed to open file for reading:" << htmlPath;
         return;
     }
     
@@ -453,4 +476,24 @@ void MainWindow::fixHtmlEncoding(const QString &htmlPath, const QByteArray &enco
     file.close();
 }
 
+void MainWindow::cleanupTempDir()
+{
+    if (m_tmpDir.isEmpty()) {
+        return;
+    }
+    
+    QDir tmpDir(m_tmpDir);
+    if (!tmpDir.exists()) {
+        return;
+    }
+    
+    qDebug() << "Cleaning up temporary directory:" << m_tmpDir;
+    
+    // Recursively remove the directory and all its contents
+    if (tmpDir.removeRecursively()) {
+        qDebug() << "Successfully removed temporary directory";
+    } else {
+        qDebug() << "Failed to remove temporary directory";
+    }
+}
 
