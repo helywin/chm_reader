@@ -2,6 +2,8 @@
 
 一个基于 Qt 5.9 的 CHM（Compiled HTML Help）阅读器，适用于 Ubuntu 18.04。
 
+![测试图片](assets/2025-11-06_08-55.png)
+
 ## 功能特性
 
 - 打开和阅读 CHM 文件
